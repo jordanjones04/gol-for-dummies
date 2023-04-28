@@ -69,11 +69,13 @@ struct gol_data {
     int num_threads;
     int para_mode;
     int print_info;
-    pthread_t thread_id;
+    //pthread_t thread_id;
+    int id;
     int rows_per_thread;
-    int start_row;
-    int end_row;
+    // int start_row;
+    // int end_row;
     int **row_partition_info;
+    int **col_partition_info;
     /* fields used by ParaVis library (when run in OUTPUT_VISI mode). */
     visi_handle handle;
     color3 *image_buff;
@@ -122,6 +124,7 @@ int main(int argc, char **argv) {
     int ret;
     struct gol_data data;
     double secs;
+    struct gol_data *tid_args;
 
     /* check number of command line arguments */
     if (argc < 6) {
@@ -142,7 +145,7 @@ int main(int argc, char **argv) {
     int r;
     int threads = data.num_threads;
     tid = malloc(sizeof(pthread_t)  *threads);
-    int *tid_args = malloc(sizeof(int) * threads);
+    tid_args = malloc(sizeof(struct gol_data) * threads);
     
     
 
@@ -164,11 +167,12 @@ int main(int argc, char **argv) {
         print_board(&data, 0);
     }
 
-
     /* Invoke play_gol in different ways based on the run mode */
     if (data.output_mode == OUTPUT_NONE) {  // run with no animation
         //play_gol(&data);
-        for(int i = 0; i<data.num_threads;i++){    \
+        for(int i = 0; i<data.num_threads;i++){ 
+            tid_args[i] = data; /* make a private copy for each thread */ //insert struct jsadklfjklsdjklfqjklsdjaklsdj
+            tid_args[i].id = i;       /* set logical ID for this thread */
             int r = pthread_create(&tid[i], NULL, play_gol_thread, &tid_args[i]);
         }for(int i = 0; i<data.num_threads;i++){
             int r = pthread_join(tid[i], NULL);
@@ -177,7 +181,9 @@ int main(int argc, char **argv) {
     else if (data.output_mode == OUTPUT_ASCII) { // run with ascii animation
         //play_gol(&data);
         int i;
-        for(i = 0; i<data.num_threads;i++){    \
+        for(i = 0; i<data.num_threads;i++){
+            tid_args[i] = data; /* make a private copy for each thread */ //insert struct jsadklfjklsdjklfqjklsdjaklsdj
+            tid_args[i].id = i;       /* set logical ID for this thread */
             int r = pthread_create(&tid[i], NULL, play_gol_thread, &tid_args[i]);
         }   //if r ==1 print error message             dklgj;jsdljfklsjkljdsklfjklsjdklfjsklfjklsjkdlfjsdkl
         for(i = 0; i<data.num_threads;i++){
@@ -270,7 +276,7 @@ int init_game_data_from_args(struct gol_data *data, int argc, char **argv) {
     data->num_threads = atoi(argv[3]);
     printf("%d\n", data->num_threads);              //for debugging purposes >.......hjsdfkhsjkhjdkfzhfjkeshbsd
 
-    //gets the parallelization mode
+    //gets the parallelization mode //0 =rows, 1 == column
     data->para_mode = atoi(argv[4]);
 
     //gets the decision on whether or not the thread allocation is printed
@@ -291,8 +297,14 @@ int init_game_data_from_args(struct gol_data *data, int argc, char **argv) {
         exit(1);
     }
      make_board(data->current, rows, cols);
-    
-    data->row_partition_info = row_partition(data->rows, data->cols, data->num_threads); 
+    if(data->para_mode == 0){
+        data->row_partition_info = row_partition(data->rows, data->cols, data->num_threads); 
+    }else if(data->para_mode == 1){
+        data->col_partition_info = col_partition(data->rows, data->cols, data->num_threads);
+    }else{
+        printf("ERROR: INVALID PARALLELIZATION MODE\n");
+        exit(1);
+    }
    //make the next board 
     data->next = malloc(sizeof(int)*rows*cols);
     if (data->next == NULL){
@@ -355,7 +367,7 @@ int** col_partition(int rows, int cols, int num_threads){ //double free in main!
         }
         partition_info[i] = (int*)malloc(2 * sizeof(int));
         partition_info[i][0] = start_col;
-        partition_info[i][0] = end_col;
+        partition_info[i][1] = end_col;
         start_col = end_col + 1;
     }
     return partition_info;
@@ -377,25 +389,40 @@ void* play_gol_thread(void* arg){
     //Unpack the arguments that are passed into the thread
     struct gol_data *data;
     data = (struct gol_data*) arg;
-    int start_row = data->start_row;
-    int end_row = data->end_row;    
-    printf("Starting Row: %d\n",start_row);
+    int id = data->id;
+    int start_row = 0;
+    int end_row = data->rows - 1;
+    int start_col = 0;
+    int end_col = data->cols - 1;
+    if(data->para_mode ==0){
+        start_row= data->row_partition_info[id][0];
+        end_row = data->row_partition_info[id][1];
+    }else{
+        start_col= data->col_partition_info[id][0];
+        end_col = data->col_partition_info[id][1];
+    }
+     
+    // printf("Starting Row: %d\n",start_row);
+    // printf("Ending Row: %d\n",end_row);
+    // printf("Starting Col: %d\n",start_col);
+    // printf("Ending Col: %d\n",end_col);
     //could call outside of this function
     //assume that we're focusing on rows
-    //lock
-    //use a global count variable
-    //start_row = row_info[count][0]
-    //end_row = row_info[count][0]
-    //unlock
-
+    if(data->print_info ==1){
+    printf("tid %d: rows: %d:%d (%d) cols: %d:%d (%d)\n", id, start_row, end_row, end_row-start_row+1, start_col, end_col, end_col - start_col +1);
+    }   
     //Process the partition of the game board assigned to this thread
     for(int a = 0; a<data->rounds; a++){
+        total_live = 0;
         for(int i = start_row; i <= end_row; i++){
-            for(int j = 0; j < data->cols; j++){
+            for(int j = start_col; j < end_col; j++){
                 int live_neighbors = count_alive(data, i, j);
                 make_alive(data, i, j, live_neighbors); 
             }
         }
+    //Barrier to wait for all threads to finish
+    //the next few lines can be printed by the thread with startCol 0, startRow 0
+
     // replaces the current board with next board
     int *temp = data->current;
     data->current = data->next;
@@ -426,68 +453,68 @@ void* play_gol_thread(void* arg){
  *   data: pointer to a struct gol_data  initialized with
  *         all GOL game playing state
  */
-void* play_gol(void* args) {
-    struct gol_data *data;
-    data = (struct gol_data*) args;
-    //initializing local variables 
-    int alive;
-    int* temp = NULL; 
+// void* play_gol(void* args) {
+//     struct gol_data *data;
+//     data = (struct gol_data*) args;
+//     //initializing local variables 
+//     int alive;
+//     int* temp = NULL; 
     
-    //Gives each thread the number of rows it reads
-    printf("Before Math: %d\n",data->num_threads);
-    data->rows_per_thread = data->rows / data->num_threads;
-    rt = data->rows %data->num_threads;
-    //LOCK
-    pthread_mutex_lock(&mutex);
-    data->start_row = sr_count;
-    if(rt!=0){
-        rt--;
-        data->rows_per_thread ++;
-    }
-    for(int a = 0; a<data->rows_per_thread; a++){
-        sr_count++;
-    }
-    pthread_mutex_unlock(&mutex);
-    printf("%d\n", data->start_row);
-    //UNLOCK
-    /*
+//     //Gives each thread the number of rows it reads
+//     printf("Before Math: %d\n",data->num_threads);
+//     data->rows_per_thread = data->rows / data->num_threads;
+//     rt = data->rows %data->num_threads;
+//     //LOCK
+//     pthread_mutex_lock(&mutex);
+//     data->start_row = sr_count;
+//     if(rt!=0){
+//         rt--;
+//         data->rows_per_thread ++;
+//     }
+//     for(int a = 0; a<data->rows_per_thread; a++){
+//         sr_count++;
+//     }
+//     pthread_mutex_unlock(&mutex);
+//     printf("%d\n", data->start_row);
+//     //UNLOCK
+//     /*
 
 
-    // for-loop for the number of rounds of the games
-    for(int z=1;z<(data->iters)+1;z++){
-        total_live = 0; 
-        for(int i=0;i<data->rows;i++){
-            for(int j=0;j<data->cols;j++){
-                alive = count_alive(data,i,j);
-                make_alive(data,i,j, alive);
-            }   
-        }
+//     // for-loop for the number of rounds of the games
+//     for(int z=1;z<(data->iters)+1;z++){
+//         total_live = 0; 
+//         for(int i=0;i<data->rows;i++){
+//             for(int j=0;j<data->cols;j++){
+//                 alive = count_alive(data,i,j);
+//                 make_alive(data,i,j, alive);
+//             }   
+//         }
 
-        //Swaps the current with next board
-        temp = data->current;
-        data->current = data->next;
-        data->next = temp;
+//         //Swaps the current with next board
+//         temp = data->current;
+//         data->current = data->next;
+//         data->next = temp;
 
-        //If the output_mode is 1 then the program runs the ASCII version
-        if(data->output_mode == 1){
-            system("clear");
-            print_board(data, z);
-            usleep(SLEEP_USECS);
-        }
+//         //If the output_mode is 1 then the program runs the ASCII version
+//         if(data->output_mode == 1){
+//             system("clear");
+//             print_board(data, z);
+//             usleep(SLEEP_USECS);
+//         }
         
-        //If output_mode is 2 then the program runs the animation version
-        else if(data->output_mode == 2){ 
-            update_colors(data);
-            draw_ready(data->handle);
-            usleep(SLEEP_USECS);
-        } 
-    }
+//         //If output_mode is 2 then the program runs the animation version
+//         else if(data->output_mode == 2){ 
+//             update_colors(data);
+//             draw_ready(data->handle);
+//             usleep(SLEEP_USECS);
+//         } 
+//     }
 
 
-    */
+//     */
 
-    return NULL;
-}
+//     return NULL;
+// }
 
    
 /* This functions counts the alive neighbors around each individual cell
